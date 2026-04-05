@@ -1,9 +1,7 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Req, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
-import { AuthGuard } from "@nestjs/passport";
+import { BadRequestException, Body, Controller, Get, Param, Post, Req, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 import type { File } from "multer";
-import { RolesGuard } from "../../auth/roles.guard";
 import { Roles } from "../../auth/roles.decorator";
 import type { Request } from "express";
 import { extname, join } from "path";
@@ -16,7 +14,6 @@ import { CreateCustomerOrderDto } from "./dto/create-customer-order.dto";
 import { CustomerPayDto } from "./dto/customer-pay.dto";
 
 @Controller("customer/orders")
-@UseGuards(AuthGuard("jwt"), RolesGuard)
 @Roles("customer")
 export class CustomerOrdersController {
   constructor(private readonly customerOrdersService: CustomerOrdersService) {}

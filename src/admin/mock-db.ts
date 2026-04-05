@@ -1,4 +1,4 @@
-export type AdminRole = "admin" | "staff" | "driver";
+export type AdminRole = "admin" | "pharmacist";
 
 export type DriverStatus = "Available" | "Busy";
 export type Driver = {

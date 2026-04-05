@@ -17,7 +17,7 @@ import { MongoService } from "./mongo.service";
 
 type RoleDoc = {
   username: string;
-  role: "admin" | "staff" | "driver" | "customer";
+  role: "admin" | "pharmacist" | "driver" | "customer";
   name: string;
 };
 
@@ -26,7 +26,7 @@ type UserDoc = {
   email?: string;
   name: string;
   passwordHash: string;
-  role: "admin" | "staff" | "driver" | "customer";
+  role: "admin" | "pharmacist" | "driver" | "customer";
   phone?: string;
 };
 
@@ -51,12 +51,23 @@ export class MongoSeeder implements OnModuleInit {
     const roles = db.collection<RoleDoc>("roles");
 
     // Keep roles limited to a fixed set required by the admin/delivery frontend.
-    const allowedUsernames = ["admin", "staff", "driver", "customer"] as const;
+    const allowedUsernames = ["admin", "pharmacist", "driver", "customer"] as const;
+
+    // Migrate legacy role docs from staff -> pharmacist.
+    await roles.updateMany(
+      { role: "staff" } as any,
+      { $set: { role: "pharmacist", name: "Pharmacist User" } }
+    );
+    // If legacy username was "staff", rename to "pharmacist" so it isn't deleted below.
+    await roles.updateMany(
+      { username: "staff" } as any,
+      { $set: { username: "pharmacist", role: "pharmacist", name: "Pharmacist User" } }
+    );
     await roles.deleteMany({ username: { $nin: [...allowedUsernames] } });
 
     const rolesToSeed: Array<Omit<RoleDoc, never>> = [
       { username: "admin", role: "admin", name: "Admin User" },
-      { username: "staff", role: "staff", name: "Staff User" },
+      { username: "pharmacist", role: "pharmacist", name: "Pharmacist User" },
       { username: "driver", role: "driver", name: "Driver" },
       { username: "customer", role: "customer", name: "Customer" },
     ];
@@ -106,21 +117,29 @@ export class MongoSeeder implements OnModuleInit {
       );
     }
 
+    // Migrate legacy users from staff -> pharmacist.
+    await users.updateMany({ role: "staff" } as any, { $set: { role: "pharmacist" } });
+
+    await users.updateMany(
+      { username: "admin", email: "admin@leanifi.com" },
+      { $set: { email: "admin@leanifi.io" } }
+    );
+
     const baseUsers: UserDoc[] = [
       {
         username: "admin",
-        email: "admin@leanifi.com",
+        email: "admin@leanifi.io",
         name: "Admin User",
         phone: "+91 9876541009",
         role: "admin",
         passwordHash,
       },
       {
-        username: "staff",
-        email: "staff@leanifi.com",
-        name: "Staff User",
-        phone: "+91 9876541000",
-        role: "staff",
+        username: "pharmacist",
+        email: "pharmacist@leanifi.com",
+        name: "Pharmacist User",
+        phone: "+91 9876541002",
+        role: "pharmacist",
         passwordHash,
       },
       // Customer seed (from mock-db)

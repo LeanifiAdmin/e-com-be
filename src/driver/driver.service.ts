@@ -4,6 +4,8 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+
+import { buildAccessTokenClaims } from "../auth/access-token.claims";
 import * as bcrypt from "bcryptjs";
 import type { Request } from "express";
 
@@ -13,13 +15,12 @@ import type { JwtUser } from "../auth/jwt.strategy";
 
 import type { DriverLoginDto } from "./dto/driver-login.dto";
 
-type DriverJwtPayload = { sub: string; role: "driver"; name: string };
-
 type UserDoc = {
   username: string;
   passwordHash: string;
-  role: "admin" | "staff" | "driver" | "customer";
+  role: "admin" | "pharmacist" | "driver" | "customer";
   name: string;
+  phone?: string;
 };
 
 @Injectable()
@@ -29,9 +30,15 @@ export class DriverService {
     private readonly mongo: MongoService
   ) {}
 
-  private issueToken(user: { id: string; name: string; role: "driver" }) {
-    const payload: DriverJwtPayload = { sub: user.id, role: user.role, name: user.name };
-    return this.jwtService.sign(payload);
+  private issueToken(user: { id: string; name: string; role: "driver"; phone?: string }) {
+    return this.jwtService.sign(
+      buildAccessTokenClaims({
+        userId: user.id,
+        role: "driver",
+        name: user.name,
+        phone: user.phone,
+      }),
+    );
   }
 
   async login(dto: DriverLoginDto) {
@@ -43,7 +50,12 @@ export class DriverService {
     const ok = await bcrypt.compare(dto.password, userDoc.passwordHash);
     if (!ok) throw new BadRequestException("Invalid credentials");
 
-    const token = this.issueToken({ id: userDoc.username, name: userDoc.name, role: "driver" });
+    const token = this.issueToken({
+      id: userDoc.username,
+      name: userDoc.name,
+      role: "driver",
+      phone: userDoc.phone,
+    });
     return { success: true as const, token, driver: { id: userDoc.username, name: userDoc.name, role: "driver" } };
   }
 

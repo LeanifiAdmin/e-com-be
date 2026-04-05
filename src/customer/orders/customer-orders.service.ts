@@ -26,6 +26,10 @@ type OrderDoc = {
   status: "Pending" | "Approved" | "Rejected";
   date: string;
   prescriptionImageUrl: string;
+  /** True when the customer uploaded a file (not the placeholder image). */
+  hasCustomerPrescription?: boolean;
+  /** Cart orders that need pharmacist review: uploaded Rx and/or cart contains Rx-required medicines. */
+  requiresPharmacistReview?: boolean;
   paymentStatus: "Pending" | "Paid";
   paymentMethod?: PaymentMethod;
   paymentRef?: string;
@@ -82,9 +86,11 @@ export class CustomerOrdersService {
       throw new BadRequestException("Prescription required to purchase one or more items");
     }
 
-    const prescriptionImageUrl = prescription
-      ? `/uploads/prescriptions/${prescription.filename}`
+    const hasCustomerPrescription = Boolean(prescription);
+    const prescriptionImageUrl = hasCustomerPrescription
+      ? `/uploads/prescriptions/${prescription!.filename}`
       : "/images/prescription-placeholder.svg";
+    const requiresPharmacistReview = hasCustomerPrescription || needsPrescription;
 
     // Stock decrement with rollback (best effort for demo).
     const decremented: Array<{ productId: string; quantity: number }> = [];
@@ -121,6 +127,8 @@ export class CustomerOrdersService {
       status: "Pending",
       date: nowIso().slice(0, 10),
       prescriptionImageUrl,
+      hasCustomerPrescription,
+      requiresPharmacistReview,
       paymentStatus: "Pending",
       paymentMethod: undefined,
       paymentRef: undefined,

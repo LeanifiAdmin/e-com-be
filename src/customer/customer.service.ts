@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+
+import { buildAccessTokenClaims } from "../auth/access-token.claims";
 import * as bcrypt from "bcryptjs";
 import { ObjectId } from "mongodb";
 
@@ -8,7 +10,7 @@ import type { JwtUser } from "../auth/jwt.strategy";
 
 import type { CustomerPhoneSendOtpDto } from "./dto/customer-phone-send-otp.dto";
 import type { CustomerPhoneVerifyOtpDto } from "./dto/customer-phone-verify-otp.dto";
-import type { CustomerEmailLoginDto } from "./dto/customer-email-login.dto";
+import type { CustomerCredentialLoginDto } from "./dto/customer-credential-login.dto";
 import type { UpdateCustomerProfileDto } from "./dto/update-customer-profile.dto";
 import type { CreateCustomerAddressDto } from "./dto/create-customer-address.dto";
 
@@ -18,7 +20,7 @@ type UserDoc = {
   _id?: ObjectId;
   username: string;
   passwordHash: string;
-  role: "admin" | "staff" | "driver" | "customer";
+  role: "admin" | "pharmacist" | "driver" | "customer";
   name: string;
   phone?: string;
   email?: string;
@@ -61,9 +63,16 @@ export class CustomerService {
     private readonly mongo: MongoService
   ) {}
 
-  private issueToken(user: { id: string; name: string }) {
-    const payload: JwtUser = { sub: user.id, role: "customer", name: user.name };
-    return this.jwtService.sign(payload);
+  private issueToken(user: { id: string; name: string; email?: string; phone?: string }) {
+    return this.jwtService.sign(
+      buildAccessTokenClaims({
+        userId: user.id,
+        role: "customer",
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+      }),
+    );
   }
 
   async sendPhoneOtp(dto: CustomerPhoneSendOtpDto) {
@@ -131,7 +140,12 @@ export class CustomerService {
 
     if (user.role !== "customer") throw new UnauthorizedException("Invalid user role");
 
-    const token = this.issueToken({ id: user.username, name: user.name });
+    const token = this.issueToken({
+      id: user.username,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+    });
     return {
       success: true as const,
       token,
@@ -144,16 +158,28 @@ export class CustomerService {
     };
   }
 
-  async emailLogin(dto: CustomerEmailLoginDto) {
+  async credentialLogin(dto: CustomerCredentialLoginDto) {
     await this.mongo.ensureConnected();
     const usersCol = this.mongo.collection<UserDoc>("users");
-    const user = await usersCol.findOne({ role: "customer", email: dto.email.toLowerCase() });
-    if (!user) throw new UnauthorizedException("Invalid credentials");
+    const raw = dto.identifier.trim();
+    if (!raw) throw new UnauthorizedException("Invalid credentials");
+
+    const user =
+      raw.includes("@")
+        ? await usersCol.findOne({ role: "customer", email: raw.toLowerCase() })
+        : await usersCol.findOne({ role: "customer", username: raw });
+
+    if (!user?.passwordHash) throw new UnauthorizedException("Invalid credentials");
 
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
     if (!ok) throw new UnauthorizedException("Invalid credentials");
 
-    const token = this.issueToken({ id: user.username, name: user.name });
+    const token = this.issueToken({
+      id: user.username,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+    });
     return {
       success: true as const,
       token,

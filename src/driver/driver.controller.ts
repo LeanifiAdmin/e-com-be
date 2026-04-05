@@ -1,23 +1,25 @@
-import { Body, Controller, Get, Post, Req, Param, UseGuards } from "@nestjs/common";
-import { AuthGuard } from "@nestjs/passport";
-import type { Request } from "express";
+import { Body, Controller, Get, Post, Req, Res, Param } from "@nestjs/common";
+import type { Request, Response } from "express";
 
+import { setTokenCookieIfPresent } from "../auth/auth-cookie";
+import { Public } from "../auth/public.decorator";
 import { DriverService } from "./driver.service";
 import type { JwtUser } from "../auth/jwt.strategy";
 import type { DriverLoginDto } from "./dto/driver-login.dto";
 import { Roles } from "../auth/roles.decorator";
-import { RolesGuard } from "../auth/roles.guard";
 
 @Controller("driver")
 export class DriverController {
   constructor(private readonly driverService: DriverService) {}
 
+  @Public()
   @Post("auth/login")
-  login(@Body() dto: DriverLoginDto) {
-    return this.driverService.login(dto);
+  async login(@Body() dto: DriverLoginDto, @Res({ passthrough: true }) res: Response) {
+    const body = await this.driverService.login(dto);
+    setTokenCookieIfPresent(res, body);
+    return body;
   }
 
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles("driver")
   @Get("jobs/assigned")
   fetchAssignedJobs(
@@ -26,7 +28,6 @@ export class DriverController {
     return this.driverService.fetchAssignedJobs(req.user);
   }
 
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles("driver")
   @Post("jobs/:orderId/accept")
   acceptJob(

@@ -1,8 +1,10 @@
 import { Controller, Get, Param, Query } from "@nestjs/common";
 
+import { Public } from "../auth/public.decorator";
 import { CatalogService } from "./catalog.service";
 import { CatalogProductsQueryDto } from "./dto/catalog-products-query.dto";
 
+@Public()
 @Controller("catalog")
 export class CatalogController {
   constructor(private readonly catalogService: CatalogService) {}

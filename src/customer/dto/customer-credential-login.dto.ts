@@ -1,12 +1,11 @@
 import { IsString, MinLength } from "class-validator";
 
-export class AdminLoginDto {
+export class CustomerCredentialLoginDto {
   @IsString()
-  @MinLength(3)
-  username!: string;
+  @MinLength(1)
+  identifier!: string;
 
   @IsString()
   @MinLength(4)
   password!: string;
 }
-

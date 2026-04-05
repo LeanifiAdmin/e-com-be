@@ -1,27 +1,39 @@
 import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Min,
   MinLength,
 } from "class-validator";
 
 export class CreateProductDto {
   @IsString()
+  @MinLength(1)
+  title!: string;
+
+  @IsString()
   @MinLength(2)
   name!: string;
 
+  @IsString()
+  @MinLength(1)
+  image!: string;
+
+  @IsOptional()
   @IsArray()
+  @ArrayMaxSize(5)
   @IsString({ each: true })
   @MinLength(1, { each: true })
-  images!: string[];
+  additional_images?: string[];
 
   @IsString()
-  @MinLength(5)
+  @MinLength(80)
   description!: string;
 
   @Type(() => Number)
@@ -69,7 +81,7 @@ export class CreateProductDto {
   @IsBoolean()
   bestSeller?: boolean;
 
-  // Must be parent category Mongo _id (string)
+  /** Parent category logical `id` (e.g. cat-123456), not Mongo `_id`. */
   @IsString()
   @MinLength(1)
   category_id!: string;
@@ -77,23 +89,40 @@ export class CreateProductDto {
   @IsString()
   @MinLength(1)
   subcategory_id!: string;
+
+  /** Pre-allocated 8-digit id (from POST /admin/products/allocate-id). Must match S3 upload `productId`. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{8}$/, { message: "product_id must be exactly 8 digits" })
+  product_id?: string;
 }
 
 export class UpdateProductDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  title?: string;
+
   @IsOptional()
   @IsString()
   @MinLength(2)
   name?: string;
 
   @IsOptional()
+  @IsString()
+  @MinLength(1)
+  image?: string;
+
+  @IsOptional()
   @IsArray()
+  @ArrayMaxSize(5)
   @IsString({ each: true })
   @MinLength(1, { each: true })
-  images?: string[];
+  additional_images?: string[];
 
   @IsOptional()
   @IsString()
-  @MinLength(5)
+  @MinLength(80)
   description?: string;
 
   @IsOptional()
@@ -143,6 +172,7 @@ export class UpdateProductDto {
   @IsBoolean()
   bestSeller?: boolean;
 
+  /** Parent category logical `id`; API still accepts legacy Mongo `_id` and normalizes to `id`. */
   @IsOptional()
   @IsString()
   @MinLength(1)

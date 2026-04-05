@@ -1,14 +1,14 @@
-import { IsOptional, IsString, MinLength } from "class-validator";
+import { IsNotEmpty, IsOptional, IsString, MinLength } from "class-validator";
 
 export class CreateCategoryDto {
   @IsString()
   @MinLength(2)
   name!: string;
 
-  @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MinLength(1)
-  imageUrl?: string;
+  imageUrl!: string;
 }
 
 export class UpdateCategoryDto {
