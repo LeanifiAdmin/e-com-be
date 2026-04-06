@@ -10,6 +10,9 @@ import * as bcrypt from "bcryptjs";
 import * as fs from "fs";
 import * as path from "path";
 
+/** CJS module — `import sharp from "sharp"` emits `default` calls that fail at runtime. */
+import sharp = require("sharp");
+
 import { buildAccessTokenClaims } from "../auth/access-token.claims";
 import type { JwtUser } from "../auth/jwt.strategy";
 import { Collection, ObjectId } from "mongodb";
@@ -1526,6 +1529,294 @@ export class AdminService {
     await this.s3Service.deleteObjectByUrl(sub.imageUrl);
     await subcategoriesCol.deleteOne({ id });
     return { success: true as const, deletedId: id };
+  }
+
+  /**
+   * Seed a synthetic catalog with images uploaded using the existing S3 flow:
+   * - category: `{catSlug}/{catSlug}.jpeg`
+   * - subcategory: `{catSlug}/{subSlug}/{subSlug}.jpeg`
+   * - product: `{catSlug}/{subSlug}/{product_id}/primary.jpeg` + `1.jpeg`…`5.jpeg`
+   *
+   * This generates its own images and data (no third-party copying). Seeded records are namespaced
+   * (ids start with `seed-`, and products have `sku` starting with `SEED-`) so you can reset safely.
+   */
+  async seedSyntheticCatalogToS3(opts?: {
+    /** Delete previous seeded records (and their S3 folders) before inserting new ones. */
+    reset?: boolean;
+    /** Categories to generate (default 12). */
+    categories?: number;
+    /** Subcategories per category (default 8). */
+    subcategoriesPerCategory?: number;
+    /** Products per subcategory (default 25). */
+    productsPerSubcategory?: number;
+    /** If set, caps total products to this number (overrides productsPerSubcategory). */
+    totalProducts?: number;
+    /** Images per product (primary + N-1 gallery), max 6 (default 3). */
+    imagesPerProduct?: number;
+    /** Also include some prescription-required items (default true). */
+    includeRx?: boolean;
+  }) {
+    if (!this.s3Service.isConfigured()) {
+      throw new BadRequestException(
+        "S3 is not configured. Set AWS_CATEGORY_BUCKET_NAME, AWS_REGION, and IAM credentials before seeding."
+      );
+    }
+    await this.ensureCatalogDefaultsAndMigrations();
+
+    const categoriesCol = this.mongo.collection<CategoryDoc>("categories");
+    const subcategoriesCol = this.mongo.collection<SubcategoryDoc>("subcategories");
+    const productsCol = this.mongo.collection<ProductDoc>("products");
+
+    const reset = Boolean(opts?.reset);
+    const categoriesCount = Math.max(1, Math.min(80, Math.floor(opts?.categories ?? 12)));
+    const subsPerCategory = Math.max(1, Math.min(40, Math.floor(opts?.subcategoriesPerCategory ?? 8)));
+    const requestedTotal = opts?.totalProducts;
+    const totalCap =
+      requestedTotal == null ? undefined : Math.max(1, Math.min(100_000, Math.floor(requestedTotal)));
+    const productsPerSubDefault = Math.max(1, Math.min(500, Math.floor(opts?.productsPerSubcategory ?? 25)));
+    const imagesPerProduct = Math.max(1, Math.min(6, Math.floor(opts?.imagesPerProduct ?? 3)));
+    const includeRx = opts?.includeRx !== false;
+
+    const ts = nowIso();
+
+    const makeLabeledPng = async (title: string, subtitle: string, bg: string, accent: string) => {
+      const safeTitle = title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const safeSubtitle = subtitle.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="900" height="675" viewBox="0 0 900 675">
+          <rect x="0" y="0" width="900" height="675" rx="36" fill="${bg}"/>
+          <rect x="90" y="110" width="720" height="360" rx="28" fill="${accent}" opacity="0.22"/>
+          <rect x="140" y="160" width="620" height="80" rx="18" fill="${accent}" opacity="0.28"/>
+          <text x="450" y="310" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="700" fill="#0B1F2A" opacity="0.88">${safeTitle}</text>
+          <text x="450" y="380" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600" fill="#0B1F2A" opacity="0.65">${safeSubtitle}</text>
+        </svg>
+      `;
+      return sharp({
+        create: { width: 900, height: 675, channels: 3, background: bg },
+      })
+        .composite([{ input: Buffer.from(svg) }])
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+    };
+
+    const palettes = [
+      { bg: "#E8F5EF", accent: "#014547" },
+      { bg: "#FFF3E0", accent: "#C43A1B" },
+      { bg: "#F3E5F5", accent: "#5B2B82" },
+      { bg: "#E3F2FD", accent: "#0D47A1" },
+      { bg: "#FCE4EC", accent: "#880E4F" },
+      { bg: "#E8EAF6", accent: "#1A237E" },
+      { bg: "#E0F7FA", accent: "#006064" },
+      { bg: "#F1F8E9", accent: "#33691E" },
+      { bg: "#FFFDE7", accent: "#F57F17" },
+      { bg: "#EFEBE9", accent: "#3E2723" },
+    ] as const;
+
+    const baseCategoryNames = [
+      "Medicines",
+      "Wellness & Vitamins",
+      "Personal Care",
+      "Women’s Health",
+      "Baby & Mom",
+      "Diabetes Care",
+      "Medical Devices",
+      "Skin Care",
+      "Hair Care",
+      "Oral Care",
+      "First Aid",
+      "Digestive Care",
+      "Pain & Fever",
+      "Cold & Flu",
+      "Heart Health",
+      "Eye & Ear Care",
+      "Nutrition",
+      "Home Hygiene",
+    ];
+
+    const baseSubcategoryNames = [
+      "Tablets",
+      "Capsules",
+      "Syrups",
+      "Ointments",
+      "Supplements",
+      "Antiseptics",
+      "Allergy relief",
+      "Antacids",
+      "Probiotics",
+      "Electrolytes",
+      "Thermometers",
+      "BP monitors",
+      "Masks & PPE",
+      "Skincare essentials",
+      "Shampoos",
+      "Toothpaste",
+      "Bandages",
+      "Pain relief",
+    ];
+
+    const pick = <T,>(arr: readonly T[], i: number) => arr[i % arr.length];
+    const pad3 = (n: number) => String(n).padStart(3, "0");
+    const rand = (seed: number) => {
+      // LCG (deterministic)
+      let x = seed % 2147483647;
+      if (x <= 0) x += 2147483646;
+      return () => (x = (x * 48271) % 2147483647) / 2147483647;
+    };
+
+    if (reset) {
+      const seedCats = await categoriesCol.find({ id: { $regex: /^seed-cat-/ } as any }).toArray();
+      for (const c of seedCats) {
+        const slug = sanitizeCategoryFolderSlug(c.name);
+        await this.s3Service.deleteAllObjectsUnderPrefix(`${slug}/`);
+      }
+      await productsCol.deleteMany({ sku: { $regex: /^SEED-/ } as any });
+      await subcategoriesCol.deleteMany({ id: { $regex: /^seed-subcat-/ } as any });
+      await categoriesCol.deleteMany({ id: { $regex: /^seed-cat-/ } as any });
+    }
+
+    const existingSeedCount = await productsCol.countDocuments({ sku: { $regex: /^SEED-/ } as any });
+    if (existingSeedCount > 0 && !reset) {
+      return {
+        success: true as const,
+        skipped: true as const,
+        reason: "Seeded products already exist (run with --reset to regenerate)" as const,
+      };
+    }
+
+    const seedCats: Array<{ id: string; name: string; palette: (typeof palettes)[number] }> = [];
+    for (let i = 0; i < categoriesCount; i++) {
+      const base = pick(baseCategoryNames, i);
+      const name = `Seed - ${base} ${i < baseCategoryNames.length ? "" : `(${i + 1})`}`.trim();
+      const id = `seed-cat-${pad3(i + 1)}`;
+      const palette = pick(palettes, i);
+      seedCats.push({ id, name, palette });
+    }
+
+    // Categories (+ images)
+    for (const c of seedCats) {
+      if (!(await categoriesCol.findOne({ id: c.id }))) {
+        const buf = await makeLabeledPng(c.name.replace(/^Seed -\s*/, ""), "Category", c.palette.bg, c.palette.accent);
+        const imageUrl = await this.s3Service.uploadCategoryImage(buf, "image/png", c.name);
+        await categoriesCol.insertOne({ id: c.id, name: c.name, imageUrl, imageUpdatedAt: ts, createdAt: ts });
+      }
+    }
+
+    const seedSubs: Array<{
+      id: string;
+      name: string;
+      categoryId: string;
+      categoryName: string;
+      palette: (typeof palettes)[number];
+    }> = [];
+    for (let ci = 0; ci < seedCats.length; ci++) {
+      for (let si = 0; si < subsPerCategory; si++) {
+        const c = seedCats[ci];
+        const base = pick(baseSubcategoryNames, ci * 7 + si);
+        const name = `${base}${si < baseSubcategoryNames.length ? "" : ` ${si + 1}`}`.trim();
+        const id = `seed-subcat-${pad3(ci + 1)}-${pad3(si + 1)}`;
+        seedSubs.push({ id, name, categoryId: c.id, categoryName: c.name, palette: pick(palettes, ci + si) });
+      }
+    }
+
+    // Subcategories (+ images)
+    for (const s of seedSubs) {
+      if (!(await subcategoriesCol.findOne({ id: s.id }))) {
+        const buf = await makeLabeledPng(s.name, s.categoryName.replace(/^Seed -\s*/, ""), s.palette.bg, s.palette.accent);
+        const imageUrl = await this.s3Service.uploadSubcategoryImage(buf, "image/png", s.categoryName, s.name);
+        await subcategoriesCol.insertOne({
+          id: s.id,
+          name: s.name,
+          category_id: s.categoryId,
+          imageUrl,
+          imageUpdatedAt: ts,
+          createdAt: ts,
+        });
+      }
+    }
+
+    const long = (s: string) => `${s} `.repeat(14).trim().slice(0, 420);
+    const forms = ["Tablets", "Capsules", "Syrup", "Cream", "Gel", "Drops", "Spray", "Powder", "Solution"] as const;
+    const strengths = ["250mg", "500mg", "10mg", "20mg", "100mg", "5%", "0.5%", "1%", "2%"] as const;
+    const brands = ["LeanifiCare", "MediPlus", "WellLife", "HealthPro", "CareOne", "PharmaSeed"] as const;
+    const packSizes = ["10 tablets", "20 tablets", "30 tablets", "60 tablets", "100 ml", "200 ml", "15 g", "30 g", "50 ml"] as const;
+
+    let inserted = 0;
+    const subsTotal = seedSubs.length;
+    const productsPerSub =
+      totalCap == null ? productsPerSubDefault : Math.max(1, Math.floor(totalCap / Math.max(1, subsTotal)));
+    const totalProducts = totalCap ?? subsTotal * productsPerSub;
+    const r = rand(totalProducts + categoriesCount * 31 + subsPerCategory * 17);
+
+    for (let si = 0; si < seedSubs.length; si++) {
+      const sub = seedSubs[si];
+      for (let pi = 0; pi < productsPerSub; pi++) {
+        if (totalCap != null && inserted >= totalCap) break;
+        const pid = allocateEightDigitProductId();
+        const brand = pick(brands, si + pi);
+        const form = pick(forms, pi);
+        const strength = pick(strengths, si + pi * 3);
+        const pack = pick(packSizes, si * 5 + pi);
+        const title = `${sub.name} ${form} ${strength}`;
+        const name = `${brand} ${title}`;
+        const sku = `SEED-${sub.id.toUpperCase()}-${String(pi + 1).padStart(4, "0")}`;
+        const price = Math.max(15, Math.round((30 + r() * 1500) / 5) * 5);
+        const mrp = Math.round(price * (1.05 + r() * 0.35));
+        const discount = Math.round(((mrp - price) / mrp) * 100);
+        const stock = Math.max(0, Math.round(r() * 500));
+        const rx = includeRx ? r() < 0.18 : false;
+
+        const desc = long(
+          `${name}. Pack size: ${pack}. Category: ${sub.categoryName}. Subcategory: ${sub.name}. ` +
+            `Use as directed. If symptoms persist, consult a healthcare professional. Store in a cool, dry place away from sunlight.`
+        );
+        assertMinDescriptionLength(desc);
+
+        const palette = pick(palettes, si + pi);
+        const primary = await makeLabeledPng(title, brand, palette.bg, palette.accent);
+        const buffers: Array<{ buffer: Buffer; mimetype: string }> = [{ buffer: primary, mimetype: "image/png" }];
+        for (let img = 1; img < imagesPerProduct; img++) {
+          const v = img === 1 ? `Pack: ${pack}` : img === 2 ? (rx ? "Prescription required" : "OTC") : `View ${img}`;
+          const b = await makeLabeledPng(title, v, palette.bg, palette.accent);
+          buffers.push({ buffer: b, mimetype: "image/png" });
+        }
+
+        const uploaded = await this.s3Service.uploadProductImages(buffers, sub.categoryName, sub.name, pid);
+
+        const rec: ProductDoc = {
+          id: pid,
+          product_id: pid,
+          title,
+          name,
+          image: uploaded[0],
+          additional_images: uploaded.slice(1),
+          description: desc,
+          price,
+          mrp,
+          discount_percent: Math.max(0, Math.min(90, discount)),
+          bestSeller: r() < 0.12,
+          stockQty: stock,
+          pack_size: pack,
+          brand,
+          sku,
+          prescription_required: rx,
+          category_id: sub.categoryId,
+          subcategory_id: sub.id,
+          createdAt: ts,
+          updatedAt: ts,
+        };
+
+        await productsCol.insertOne(rec);
+        inserted++;
+      }
+      if (totalCap != null && inserted >= totalCap) break;
+    }
+
+    return {
+      success: true as const,
+      skipped: false as const,
+      seeded: { categories: seedCats.length, subcategories: seedSubs.length, products: inserted },
+      params: { categoriesCount, subsPerCategory, productsPerSub, totalCap, imagesPerProduct, includeRx },
+    };
   }
 }
 

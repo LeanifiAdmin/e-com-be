@@ -1,4 +1,5 @@
 import { Injectable, OnModuleInit, NotFoundException } from "@nestjs/common";
+import type { Collection } from "mongodb";
 import { ObjectId } from "mongodb";
 
 import { MongoService } from "../database/mongo.service";
@@ -135,6 +136,11 @@ export class CatalogService implements OnModuleInit {
         await productsCol.updateMany({ category_id: oid }, { $set: { category_id: c.id } });
       }
 
+      // Optional local-only demo seed (use the S3 seeder script for production-like data).
+      if (process.env.SEED_DEMO_CATALOG_LOCAL === "true") {
+        await this.seedDemoCatalogIfEmpty(categoriesCol, subcategoriesCol, productsCol);
+      }
+
       // Legacy: rename `medicines` → `products` once only (no re-copy from `medicines` when empty).
       try {
         const cols = await db.listCollections({}, { nameOnly: true }).toArray();
@@ -149,6 +155,303 @@ export class CatalogService implements OnModuleInit {
     })();
 
     return this.ensurePromise;
+  }
+
+  /**
+   * When the catalog has no products yet (fresh DB), insert demo categories, subcategories, and
+   * products so the storefront and admin UIs show realistic data. Uses local `/images/...` paths
+   * resolved by the customer frontend.
+   */
+  private async seedDemoCatalogIfEmpty(
+    categoriesCol: Collection<CategoryDoc>,
+    subcategoriesCol: Collection<SubcategoryDoc>,
+    productsCol: Collection<ProductDoc>
+  ): Promise<void> {
+    if ((await productsCol.countDocuments({})) > 0) return;
+
+    const ts = nowIso();
+    const placeholderCat = "/images/category-placeholder.svg";
+
+    const demoCategories: CategoryDoc[] = [
+      {
+        id: "cat-wellness",
+        name: "Wellness & Vitamins",
+        imageUrl: placeholderCat,
+        imageUpdatedAt: ts,
+        createdAt: ts,
+      },
+      {
+        id: "cat-pain",
+        name: "Pain & Fever",
+        imageUrl: placeholderCat,
+        imageUpdatedAt: ts,
+        createdAt: ts,
+      },
+      {
+        id: "cat-digestive",
+        name: "Digestive Care",
+        imageUrl: placeholderCat,
+        imageUpdatedAt: ts,
+        createdAt: ts,
+      },
+    ];
+
+    for (const c of demoCategories) {
+      if (!(await categoriesCol.findOne({ id: c.id }))) {
+        await categoriesCol.insertOne(c);
+      }
+    }
+
+    const demoSubcategories: SubcategoryDoc[] = [
+      {
+        id: "sub-well-multi",
+        name: "Multivitamins",
+        category_id: "cat-wellness",
+        imageUrl: placeholderCat,
+        imageUpdatedAt: ts,
+        createdAt: ts,
+      },
+      {
+        id: "sub-well-immune",
+        name: "Immunity",
+        category_id: "cat-wellness",
+        imageUrl: placeholderCat,
+        imageUpdatedAt: ts,
+        createdAt: ts,
+      },
+      {
+        id: "sub-pain-analgesic",
+        name: "Analgesics",
+        category_id: "cat-pain",
+        createdAt: ts,
+      },
+      {
+        id: "sub-pain-fever",
+        name: "Fever relief",
+        category_id: "cat-pain",
+        createdAt: ts,
+      },
+      {
+        id: "sub-dig-antacid",
+        name: "Antacids",
+        category_id: "cat-digestive",
+        createdAt: ts,
+      },
+      {
+        id: "sub-dig-probiotic",
+        name: "Probiotics",
+        category_id: "cat-digestive",
+        createdAt: ts,
+      },
+      {
+        id: "sub-dig-hydration",
+        name: "Electrolytes & hydration",
+        category_id: "cat-digestive",
+        createdAt: ts,
+      },
+    ];
+
+    for (const s of demoSubcategories) {
+      if (!(await subcategoriesCol.findOne({ id: s.id }))) {
+        await subcategoriesCol.insertOne(s);
+      }
+    }
+
+    const demoProducts: ProductDoc[] = [
+      {
+        id: "prod-demo-001",
+        name: "Daily Multivitamin Tablets",
+        title: "Daily Multivitamin Tablets",
+        description: "Balanced vitamins and minerals for everyday wellness.",
+        price: 299,
+        mrp: 350,
+        discount_percent: 15,
+        stockQty: 120,
+        pack_size: "30 tablets",
+        brand: "WellLife",
+        sku: "DEMO-WL-MV-30",
+        prescription_required: false,
+        bestSeller: true,
+        category_id: "cat-wellness",
+        subcategory_id: "sub-well-multi",
+        image: "/images/demo-product-1.svg",
+        additional_images: ["/images/demo-product-4.svg", "/images/product-placeholder.svg"],
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-002",
+        name: "Vitamin C 1000mg",
+        title: "Vitamin C 1000mg",
+        description: "High-dose ascorbic acid to support immune health.",
+        price: 420,
+        mrp: 480,
+        stockQty: 85,
+        pack_size: "60 tablets",
+        brand: "ImmunoPlus",
+        sku: "DEMO-VC-1000-60",
+        prescription_required: false,
+        category_id: "cat-wellness",
+        subcategory_id: "sub-well-immune",
+        image: "/images/demo-product-1.svg",
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-003",
+        name: "Zinc + Vitamin D3",
+        title: "Zinc + Vitamin D3",
+        description: "Combined zinc bisglycinate with cholecalciferol.",
+        price: 365,
+        mrp: 410,
+        stockQty: 64,
+        pack_size: "45 tablets",
+        brand: "SunShield",
+        sku: "DEMO-ZN-D3-45",
+        prescription_required: false,
+        category_id: "cat-wellness",
+        subcategory_id: "sub-well-immune",
+        image: "/images/demo-product-4.svg",
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-004",
+        name: "Paracetamol 500mg",
+        title: "Paracetamol 500mg",
+        description: "Relieves mild to moderate pain and reduces fever.",
+        price: 45,
+        mrp: 60,
+        stockQty: 400,
+        pack_size: "20 tablets",
+        brand: "ReliefMed",
+        sku: "DEMO-PARA-500-20",
+        prescription_required: false,
+        category_id: "cat-pain",
+        subcategory_id: "sub-pain-analgesic",
+        image: "/images/demo-product-2.svg",
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-005",
+        name: "Ibuprofen 400mg",
+        title: "Ibuprofen 400mg",
+        description: "NSAID for inflammatory pain — pharmacist review may apply.",
+        price: 120,
+        mrp: 145,
+        stockQty: 90,
+        pack_size: "10 tablets",
+        brand: "ReliefMed",
+        sku: "DEMO-IBU-400-10",
+        prescription_required: true,
+        category_id: "cat-pain",
+        subcategory_id: "sub-pain-analgesic",
+        image: "/images/demo-product-2.svg",
+        additional_images: ["/images/product-placeholder.svg"],
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-006",
+        name: "Paracetamol Oral Suspension",
+        title: "Paracetamol Oral Suspension",
+        description: "Pleasant-flavour liquid for children and adults who cannot swallow tablets.",
+        price: 95,
+        mrp: 110,
+        stockQty: 55,
+        pack_size: "100 ml",
+        brand: "ReliefMed",
+        sku: "DEMO-PARA-SUS-100",
+        prescription_required: false,
+        category_id: "cat-pain",
+        subcategory_id: "sub-pain-fever",
+        image: "/images/demo-product-2.svg",
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-007",
+        name: "Antacid Chewable Tablets",
+        title: "Antacid Chewable Tablets",
+        description: "Fast relief from acidity and heartburn.",
+        price: 180,
+        mrp: 220,
+        stockQty: 72,
+        pack_size: "24 tablets",
+        brand: "GutEase",
+        sku: "DEMO-ANTA-CHW-24",
+        prescription_required: false,
+        category_id: "cat-digestive",
+        subcategory_id: "sub-dig-antacid",
+        image: "/images/demo-product-3.svg",
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-008",
+        name: "Probiotic Capsules 10B CFU",
+        title: "Probiotic Capsules 10B CFU",
+        description: "Multi-strain probiotics for digestive balance.",
+        price: 890,
+        mrp: 999,
+        discount_percent: 10,
+        stockQty: 40,
+        pack_size: "30 capsules",
+        brand: "GutEase",
+        sku: "DEMO-PROB-10B-30",
+        prescription_required: false,
+        bestSeller: true,
+        category_id: "cat-digestive",
+        subcategory_id: "sub-dig-probiotic",
+        image: "/images/demo-product-3.svg",
+        additional_images: ["/images/demo-product-4.svg"],
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-009",
+        name: "Omega-3 Fish Oil 1000mg",
+        title: "Omega-3 Fish Oil 1000mg",
+        description: "EPA and DHA from purified fish oil.",
+        price: 1250,
+        mrp: 1390,
+        stockQty: 33,
+        pack_size: "60 softgels",
+        brand: "WellLife",
+        sku: "DEMO-O3-1K-60",
+        prescription_required: false,
+        category_id: "cat-wellness",
+        subcategory_id: "sub-well-multi",
+        image: "/images/demo-product-1.svg",
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      {
+        id: "prod-demo-010",
+        name: "ORS Sachets (Oral Rehydration)",
+        title: "ORS Sachets (Oral Rehydration)",
+        description: "WHO-formulated electrolyte mix for dehydration.",
+        price: 140,
+        mrp: 160,
+        stockQty: 150,
+        pack_size: "8 sachets",
+        brand: "Hydrate",
+        sku: "DEMO-ORS-8",
+        prescription_required: false,
+        category_id: "cat-digestive",
+        subcategory_id: "sub-dig-hydration",
+        image: "/images/demo-product-4.svg",
+        createdAt: ts,
+        updatedAt: ts,
+      },
+    ];
+
+    for (const p of demoProducts) {
+      if (!(await productsCol.findOne({ id: p.id }))) {
+        await productsCol.insertOne(p);
+      }
+    }
   }
 
   /** Map query param to stored `category_id` (logical id); accepts legacy Mongo `_id` hex. */
